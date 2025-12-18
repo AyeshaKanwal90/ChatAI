@@ -12,6 +12,7 @@ export const ChatProvider = ({ children }) => {
     const [searchQuery, setSearchQuery] = useState('');
     const [chatResetTrigger, setChatResetTrigger] = useState(0);
     const [isLoading, setIsLoading] = useState(false);
+    const [wasIdUpgraded, setWasIdUpgraded] = useState(false);
 
     // Fetch conversations from DB on mount
     useEffect(() => {
@@ -23,17 +24,17 @@ export const ChatProvider = ({ children }) => {
         if (currentChatId) {
             // If it's a real MongoDB ID (24 chars), fetch from API
             if (currentChatId.length === 24) {
-                // If we already have messages for this chat (e.g. just created it), don't re-fetch
-                // unless we explicitly want to (e.g. on manual refresh)
-                if (currentMessages.length > 0) {
-                    // We might want to sync eventually, but for now trust local state
-                    // to prevent the "disappearing" race condition
+                if (wasIdUpgraded) {
+                    // This was an upgrade from local temp ID to real ID
+                    // We already have the messages in state, so don't fetch (avoid race condition)
+                    setWasIdUpgraded(false);
                     return;
                 }
                 fetchChatDetails(currentChatId);
             }
         } else {
             setCurrentMessages([]);
+            setWasIdUpgraded(false);
         }
     }, [currentChatId]);
 
@@ -150,6 +151,7 @@ export const ChatProvider = ({ children }) => {
                     }
                     return chat;
                 }));
+                setWasIdUpgraded(true);
                 setCurrentChatId(serverChatId);
                 chatId = serverChatId;
             }
