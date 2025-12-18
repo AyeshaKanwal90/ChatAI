@@ -23,6 +23,13 @@ export const ChatProvider = ({ children }) => {
         if (currentChatId) {
             // If it's a real MongoDB ID (24 chars), fetch from API
             if (currentChatId.length === 24) {
+                // If we already have messages for this chat (e.g. just created it), don't re-fetch
+                // unless we explicitly want to (e.g. on manual refresh)
+                if (currentMessages.length > 0) {
+                    // We might want to sync eventually, but for now trust local state
+                    // to prevent the "disappearing" race condition
+                    return;
+                }
                 fetchChatDetails(currentChatId);
             }
         } else {

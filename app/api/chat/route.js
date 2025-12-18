@@ -10,55 +10,57 @@ import Message from '@/models/Message';
 export async function POST(req) {
     const { messages, chatId, saveUserMessage = true, assistantMessageId } = await req.json();
 
-    // Get the last message (user's message)
     const lastMessage = messages[messages.length - 1];
 
     try {
         await dbConnect();
+        console.log("Connected to MongoDB for chat save");
 
         let conversation;
         if (chatId) {
             conversation = await Conversation.findById(chatId).catch(() => null);
         }
 
-        // Create new conversation if none exists (must do this before stream to get ID)
+        // 1. Create new conversation if none exists (SYNC)
         if (!conversation) {
             conversation = await Conversation.create({
                 title: lastMessage.content.slice(0, 30) + (lastMessage.content.length > 30 ? '...' : ''),
             });
+            console.log("Created new conversation:", conversation._id);
         }
 
-        // Generate Stream IMMEDIATELY
+        // 2. Save User Message (SYNC)
+        if (saveUserMessage) {
+            await Message.create({
+                conversationId: conversation._id,
+                role: 'user',
+                content: lastMessage.content,
+                id: lastMessage.id,
+                createdAt: new Date(),
+            });
+
+            await Conversation.findByIdAndUpdate(conversation._id, {
+                $inc: { messageCount: 1 },
+                lastMessageAt: new Date(),
+                updatedAt: new Date()
+            });
+            console.log("Saved user message for conversation:", conversation._id);
+        }
+
+        // 3. Generate Stream
         const result = streamText({
             model: openai('gpt-4o-mini'),
             messages,
         });
 
-        // Use 'after' to handle DB operations in the background
+        // 4. Save Assistant Message (ASYNC / Background)
         after(async () => {
             try {
+                // Ensure helper is called in background context if needed
                 await dbConnect();
 
-                // 1. Save User Message
-                if (saveUserMessage) {
-                    await Message.create({
-                        conversationId: conversation._id,
-                        role: 'user',
-                        content: lastMessage.content,
-                        id: lastMessage.id,
-                        createdAt: new Date(),
-                    });
-
-                    await Conversation.findByIdAndUpdate(conversation._id, {
-                        $inc: { messageCount: 1 },
-                        lastMessageAt: new Date()
-                    });
-                }
-
-                // 2. Wait for stream to finish and save assistant message
                 const { text } = await result;
 
-                // Check if updating an existing message (regeneration)
                 if (assistantMessageId) {
                     const existingMsg = await Message.findOne({
                         conversationId: conversation._id,
@@ -69,11 +71,11 @@ export async function POST(req) {
                         existingMsg.content = text;
                         existingMsg.createdAt = new Date();
                         await existingMsg.save();
+                        console.log("Updated assistant message:", assistantMessageId);
                         return;
                     }
                 }
 
-                // Create new assistant message
                 await Message.create({
                     conversationId: conversation._id,
                     role: 'assistant',
@@ -82,14 +84,14 @@ export async function POST(req) {
                     createdAt: new Date(),
                 });
 
-                // Update conversation metadata
                 await Conversation.findByIdAndUpdate(conversation._id, {
                     $inc: { messageCount: 1 },
                     lastMessageAt: new Date(),
                     updatedAt: new Date()
                 });
+                console.log("Saved assistant message for conversation:", conversation._id);
             } catch (dbError) {
-                console.error("Background DB error:", dbError);
+                console.error("Background DB error during assistant save:", dbError);
             }
         });
 
@@ -99,7 +101,13 @@ export async function POST(req) {
             }
         });
     } catch (error) {
-        console.error("Error in chat route:", error);
-        return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+        console.error("Critical error in chat route:", error);
+        return new Response(JSON.stringify({
+            error: error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' }
+        });
     }
 }
