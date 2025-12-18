@@ -59,7 +59,7 @@ export async function POST(req) {
                 // Ensure helper is called in background context if needed
                 await dbConnect();
 
-                const { text } = await result;
+                const text = await result.text;
 
                 if (assistantMessageId) {
                     const existingMsg = await Message.findOne({
