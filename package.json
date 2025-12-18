@@ -9,7 +9,17 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^2.0.88",
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/icons-material": "^7.3.6",
+    "@mui/material": "^7.3.6",
+    "@mui/material-nextjs": "^7.3.6",
+    "ai": "^5.0.114",
+    "dotenv": "^17.2.3",
+    "mongoose": "^9.0.1",
     "next": "16.0.10",
+    "openai": "^6.13.0",
     "react": "19.2.1",
     "react-dom": "19.2.1"
   },
