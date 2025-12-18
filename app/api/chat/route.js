@@ -1,12 +1,12 @@
 import { openai } from '@ai-sdk/openai';
 import { streamText } from 'ai';
+import { after } from 'next/server';
 import dbConnect from '@/lib/mongodb';
 import Conversation from '@/models/Conversation';
 import Message from '@/models/Message';
 
-// Allow streaming responses up to 30 seconds
-export const maxDuration = 30;
-
+// Vercel Hobby plan limit is 10s. For Pro, it's more.
+// We remove maxDuration because Hobby doesn't support setting it above 10.
 export async function POST(req) {
     const { messages, chatId, saveUserMessage = true, assistantMessageId } = await req.json();
 
@@ -21,36 +21,42 @@ export async function POST(req) {
             conversation = await Conversation.findById(chatId).catch(() => null);
         }
 
-        // Create new conversation if none exists
+        // Create new conversation if none exists (must do this before stream to get ID)
         if (!conversation) {
             conversation = await Conversation.create({
                 title: lastMessage.content.slice(0, 30) + (lastMessage.content.length > 30 ? '...' : ''),
             });
         }
 
-        // Save User Message
-        if (saveUserMessage) {
-            await Message.create({
-                conversationId: conversation._id,
-                role: 'user',
-                content: lastMessage.content,
-                id: lastMessage.id, // Client-side ID
-                createdAt: new Date(),
-            });
-
-            // Increment message count on conversation
-            await Conversation.findByIdAndUpdate(conversation._id, {
-                $inc: { messageCount: 1 },
-                lastMessageAt: new Date()
-            });
-        }
-
-        // Generate Stream
+        // Generate Stream IMMEDIATELY
         const result = streamText({
             model: openai('gpt-4o-mini'),
             messages,
-            onFinish: async (completion) => {
+        });
+
+        // Use 'after' to handle DB operations in the background
+        after(async () => {
+            try {
                 await dbConnect();
+
+                // 1. Save User Message
+                if (saveUserMessage) {
+                    await Message.create({
+                        conversationId: conversation._id,
+                        role: 'user',
+                        content: lastMessage.content,
+                        id: lastMessage.id,
+                        createdAt: new Date(),
+                    });
+
+                    await Conversation.findByIdAndUpdate(conversation._id, {
+                        $inc: { messageCount: 1 },
+                        lastMessageAt: new Date()
+                    });
+                }
+
+                // 2. Wait for stream to finish and save assistant message
+                const { text } = await result;
 
                 // Check if updating an existing message (regeneration)
                 if (assistantMessageId) {
@@ -60,7 +66,7 @@ export async function POST(req) {
                     });
 
                     if (existingMsg) {
-                        existingMsg.content = completion.text;
+                        existingMsg.content = text;
                         existingMsg.createdAt = new Date();
                         await existingMsg.save();
                         return;
@@ -71,7 +77,7 @@ export async function POST(req) {
                 await Message.create({
                     conversationId: conversation._id,
                     role: 'assistant',
-                    content: completion.text,
+                    content: text,
                     id: assistantMessageId,
                     createdAt: new Date(),
                 });
@@ -82,7 +88,9 @@ export async function POST(req) {
                     lastMessageAt: new Date(),
                     updatedAt: new Date()
                 });
-            },
+            } catch (dbError) {
+                console.error("Background DB error:", dbError);
+            }
         });
 
         return result.toTextStreamResponse({
